@@ -66,13 +66,25 @@ app.use('/api/admin', require('./routes/admin'));
 app.get('/', (req, res) => {
   res.json({
     name: 'ServisKu API',
-    version: '1.0.0',
+    version: '1.0.1',
     status: 'running',
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api', (req, res) => {
+  res.json({
+    name: 'ServisKu API',
+    version: '1.0.1',
+    status: 'running',
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString(),
   });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, timestamp: new Date().toISOString() });
+  res.json({ success: true, version: '1.0.1', timestamp: new Date().toISOString() });
 });
 
 // 404
@@ -86,11 +98,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: 'Internal server error' });
 });
 
-// Start
+// Start server only if not in serverless environment
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`[ServisKu] API running on port ${PORT}`);
-});
+if (process.env.VERCEL !== '1') {
+  server.listen(PORT, () => {
+    console.log(`[ServisKu] API running on port ${PORT}`);
+  });
+}
+
+// Export for Vercel serverless
+module.exports = app;
 
 // Graceful shutdown
 process.on('SIGINT', () => {
