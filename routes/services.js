@@ -43,8 +43,14 @@ router.get('/search', async (req, res) => {
       idx++;
     }
 
+    // Support subcategory by UUID or slug
     if (subcategory_id) {
-      conditions.push(`cs.subcategory_id = $${idx}`);
+      if (isUUID(subcategory_id)) {
+        conditions.push(`cs.subcategory_id = $${idx}`);
+      } else {
+        // Treat as slug
+        conditions.push(`sc.slug = $${idx}`);
+      }
       params.push(subcategory_id);
       idx++;
     }
