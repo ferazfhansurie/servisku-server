@@ -9,7 +9,7 @@ router.get('/', async (req, res) => {
       `SELECT c.*,
         COALESCE(json_agg(
           json_build_object(
-            'id', s.id, 'name_en', s.name_en, 'name_ms', s.name_ms,
+            'id', s.id, 'category_id', s.category_id, 'name_en', s.name_en, 'name_ms', s.name_ms,
             'slug', s.slug, 'icon', s.icon, 'sort_order', s.sort_order
           ) ORDER BY s.sort_order
         ) FILTER (WHERE s.id IS NOT NULL), '[]') as subcategories
