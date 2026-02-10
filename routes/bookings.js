@@ -334,6 +334,31 @@ router.put('/:id/complete', async (req, res) => {
 
     if (!booking) return res.status(404).json({ success: false, error: 'Booking not found or not in progress' });
 
+    // Increment total_jobs_completed for the contractor
+    await db.updateRow(
+      `UPDATE contractor_profiles SET total_jobs_completed = total_jobs_completed + 1, updated_at = NOW()
+       WHERE id = $1`,
+      [booking.contractor_id]
+    );
+
+    // Auto-create payment record if none exists for this booking
+    const existingPayment = await db.getRow(
+      'SELECT id FROM payments WHERE booking_id = $1',
+      [booking.id]
+    );
+    if (!existingPayment && booking.contractor_id) {
+      const amount = booking.final_price || booking.quoted_price || 0;
+      const platformFeePercent = parseFloat(process.env.PLATFORM_FEE_PERCENT || '15');
+      const platformFee = amount * platformFeePercent / 100;
+      const contractorPayout = amount - platformFee;
+
+      await db.insertRow(
+        `INSERT INTO payments (booking_id, user_id, contractor_id, amount, platform_fee, contractor_payout, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'captured') RETURNING *`,
+        [booking.id, booking.user_id, booking.contractor_id, amount, platformFee, contractorPayout]
+      );
+    }
+
     const io = getIO();
     io.to(`user:${booking.user_id}`).emit('booking:completed', booking);
     await db.insertRow(

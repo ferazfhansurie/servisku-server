@@ -41,7 +41,7 @@ router.get('/dashboard', async (req, res) => {
         [profile.id]
       ),
       db.getRow(
-        `SELECT COALESCE(SUM(contractor_payout), 0) as total FROM payments WHERE contractor_id = $1 AND status = 'released' AND paid_at >= date_trunc('month', CURRENT_DATE)`,
+        `SELECT COALESCE(SUM(contractor_payout), 0) as total FROM payments WHERE contractor_id = $1 AND status IN ('released', 'captured') AND created_at >= date_trunc('month', CURRENT_DATE)`,
         [profile.id]
       ),
       db.getRow(
@@ -413,6 +413,54 @@ router.put('/reviews/:id/reply', async (req, res) => {
   } catch (error) {
     console.error('Error replying to review:', error);
     res.status(500).json({ success: false, error: 'Failed to reply to review' });
+  }
+});
+
+// POST /api/contractor/sync — Backfill payments for completed bookings and sync job count
+router.post('/sync', async (req, res) => {
+  try {
+    const profile = await getProfile(req.user.id, req.user.full_name);
+    if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
+
+    // Find completed bookings that have no payment record
+    const bookingsWithoutPayment = await db.getRows(
+      `SELECT b.* FROM bookings b
+       LEFT JOIN payments p ON p.booking_id = b.id
+       WHERE b.contractor_id = $1 AND b.status = 'completed' AND p.id IS NULL`,
+      [profile.id]
+    );
+
+    const platformFeePercent = parseFloat(process.env.PLATFORM_FEE_PERCENT || '15');
+    let created = 0;
+
+    for (const booking of bookingsWithoutPayment) {
+      const amount = booking.final_price || booking.quoted_price || 0;
+      if (amount <= 0) continue;
+      const platformFee = amount * platformFeePercent / 100;
+      const contractorPayout = amount - platformFee;
+
+      await db.insertRow(
+        `INSERT INTO payments (booking_id, user_id, contractor_id, amount, platform_fee, contractor_payout, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'captured', $7) RETURNING *`,
+        [booking.id, booking.user_id, profile.id, amount, platformFee, contractorPayout, booking.completed_at || new Date()]
+      );
+      created++;
+    }
+
+    // Sync total_jobs_completed from actual completed bookings count
+    const result = await db.getRow(
+      `SELECT COUNT(*) as count FROM bookings WHERE contractor_id = $1 AND status = 'completed'`,
+      [profile.id]
+    );
+    await db.updateRow(
+      `UPDATE contractor_profiles SET total_jobs_completed = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      [parseInt(result.count), profile.id]
+    );
+
+    res.json({ success: true, payments_created: created, total_jobs_completed: parseInt(result.count) });
+  } catch (error) {
+    console.error('Error syncing contractor data:', error);
+    res.status(500).json({ success: false, error: 'Failed to sync data' });
   }
 });
 
