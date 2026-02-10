@@ -11,11 +11,11 @@ router.use(requireRole('contractor'));
 async function getProfile(userId, userName) {
   let profile = await db.getRow('SELECT * FROM contractor_profiles WHERE user_id = $1', [userId]);
   
-  // Auto-create profile if doesn't exist
+  // Auto-create profile if doesn't exist (auto-verified for MVP)
   if (!profile) {
     profile = await db.insertRow(
       `INSERT INTO contractor_profiles (user_id, business_name, verification_status, is_online)
-       VALUES ($1, $2, 'pending', false) RETURNING *`,
+       VALUES ($1, $2, 'verified', false) RETURNING *`,
       [userId, userName || 'My Business']
     );
   }
