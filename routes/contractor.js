@@ -7,15 +7,26 @@ const { authMiddleware, requireRole } = require('../middleware/auth');
 router.use(authMiddleware);
 router.use(requireRole('contractor'));
 
-// Helper: get contractor profile
-async function getProfile(userId) {
-  return db.getRow('SELECT * FROM contractor_profiles WHERE user_id = $1', [userId]);
+// Helper: get contractor profile, auto-create if doesn't exist
+async function getProfile(userId, userName) {
+  let profile = await db.getRow('SELECT * FROM contractor_profiles WHERE user_id = $1', [userId]);
+  
+  // Auto-create profile if doesn't exist
+  if (!profile) {
+    profile = await db.insertRow(
+      `INSERT INTO contractor_profiles (user_id, business_name, verification_status, is_online)
+       VALUES ($1, $2, 'pending', false) RETURNING *`,
+      [userId, userName || 'My Business']
+    );
+  }
+  
+  return profile;
 }
 
 // GET /api/contractor/dashboard — Dashboard stats
 router.get('/dashboard', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
 
     const today = new Date().toISOString().split('T')[0];
@@ -58,7 +69,7 @@ router.get('/dashboard', async (req, res) => {
 // CRUD /api/contractor/services
 router.get('/services', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     const services = await db.getRows(
       `SELECT cs.*, sc.name_en as subcategory_name, sc.name_ms as subcategory_name_ms
        FROM contractor_services cs
@@ -74,7 +85,7 @@ router.get('/services', async (req, res) => {
 
 router.post('/services', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     const { subcategory_id, title, description, base_price, price_type, images } = req.body;
 
     if (!title || !base_price || !subcategory_id) {
@@ -96,7 +107,7 @@ router.post('/services', async (req, res) => {
 
 router.put('/services/:id', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     const { title, description, base_price, price_type, images, is_active, subcategory_id } = req.body;
     const fields = [];
     const values = [];
@@ -129,7 +140,7 @@ router.put('/services/:id', async (req, res) => {
 
 router.delete('/services/:id', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     await db.deleteRow('DELETE FROM contractor_services WHERE id = $1 AND contractor_id = $2 RETURNING *', [req.params.id, profile.id]);
     res.json({ success: true });
   } catch (error) {
@@ -140,7 +151,7 @@ router.delete('/services/:id', async (req, res) => {
 // CRUD /api/contractor/availability
 router.get('/availability', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     const availability = await db.getRows(
       'SELECT * FROM contractor_availability WHERE contractor_id = $1 ORDER BY day_of_week, start_time',
       [profile.id]
@@ -153,7 +164,7 @@ router.get('/availability', async (req, res) => {
 
 router.put('/availability', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     const { slots } = req.body; // Array of { day_of_week, start_time, end_time, is_available }
 
     // Delete existing and re-insert
@@ -212,7 +223,7 @@ router.put('/location', async (req, res) => {
 // GET /api/contractor/earnings — Earnings summary
 router.get('/earnings', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     const { period = 'month' } = req.query;
 
     let dateFilter = "date_trunc('month', CURRENT_DATE)";
@@ -249,7 +260,7 @@ router.get('/earnings', async (req, res) => {
 // GET /api/contractor/nearby-requests — Nearby HELP! requests for bidding
 router.get('/nearby-requests', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
 
     const { lat, lng, radius = 25 } = req.query;
@@ -300,7 +311,7 @@ router.get('/nearby-requests', async (req, res) => {
 // GET /api/contractor/bookings — Contractor's bookings (alternative to /api/bookings)
 router.get('/bookings', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
 
     const { status, page = 1, limit = 20 } = req.query;
@@ -346,7 +357,7 @@ router.get('/bookings', async (req, res) => {
 // GET /api/contractor/reviews — Contractor's reviews
 router.get('/reviews', async (req, res) => {
   try {
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
 
     const { page = 1, limit = 20 } = req.query;
@@ -381,7 +392,7 @@ router.put('/reviews/:id/reply', async (req, res) => {
     const { reply } = req.body;
     if (!reply) return res.status(422).json({ success: false, error: 'reply is required' });
 
-    const profile = await getProfile(req.user.id);
+    const profile = await getProfile(req.user.id, req.user.full_name);
     
     const review = await db.updateRow(
       `UPDATE reviews SET contractor_reply = $1, replied_at = NOW(), updated_at = NOW()
