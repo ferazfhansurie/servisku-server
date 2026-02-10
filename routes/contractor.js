@@ -246,4 +246,156 @@ router.get('/earnings', async (req, res) => {
   }
 });
 
+// GET /api/contractor/nearby-requests — Nearby HELP! requests for bidding
+router.get('/nearby-requests', async (req, res) => {
+  try {
+    const profile = await getProfile(req.user.id);
+    if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
+
+    const { lat, lng, radius = 25 } = req.query;
+    
+    // Use contractor's stored location if not provided
+    const contractorLat = lat || profile.lat;
+    const contractorLng = lng || profile.lng;
+    
+    if (!contractorLat || !contractorLng) {
+      return res.status(422).json({ success: false, error: 'Location required. Update your location in profile settings.' });
+    }
+
+    const requests = await db.getRows(
+      `SELECT b.*,
+              sc.name_en as subcategory_name, sc.name_ms as subcategory_name_ms,
+              c.name_en as category_name,
+              u.full_name as user_name, u.avatar_url as user_avatar,
+              (6371 * acos(cos(radians($1)) * cos(radians(b.lat)) * cos(radians(b.lng) - radians($2)) + sin(radians($1)) * sin(radians(b.lat)))) as distance_km
+       FROM bookings b
+       LEFT JOIN subcategories sc ON sc.id = b.subcategory_id
+       LEFT JOIN categories c ON c.id = sc.category_id
+       LEFT JOIN users u ON u.id = b.user_id
+       WHERE b.is_help_request = true
+         AND b.status = 'pending'
+         AND b.lat IS NOT NULL AND b.lng IS NOT NULL
+         AND (6371 * acos(cos(radians($1)) * cos(radians(b.lat)) * cos(radians(b.lng) - radians($2)) + sin(radians($1)) * sin(radians(b.lat)))) <= $3
+       ORDER BY distance_km ASC
+       LIMIT 50`,
+      [contractorLat, contractorLng, radius]
+    );
+
+    // Check if contractor already bid on each request
+    for (const request of requests) {
+      const existingBid = await db.getRow(
+        'SELECT id FROM booking_bids WHERE booking_id = $1 AND contractor_id = $2',
+        [request.id, profile.id]
+      );
+      request.has_bid = !!existingBid;
+    }
+
+    res.json({ success: true, requests });
+  } catch (error) {
+    console.error('Error fetching nearby requests:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch nearby requests' });
+  }
+});
+
+// GET /api/contractor/bookings — Contractor's bookings (alternative to /api/bookings)
+router.get('/bookings', async (req, res) => {
+  try {
+    const profile = await getProfile(req.user.id);
+    if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
+
+    const { status, page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 100);
+    const offset = (pageNum - 1) * limitNum;
+
+    let conditions = ['b.contractor_id = $1'];
+    let params = [profile.id];
+    let idx = 2;
+
+    if (status) {
+      conditions.push(`b.status = $${idx}`);
+      params.push(status);
+      idx++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limitNum, offset);
+
+    const bookings = await db.getRows(
+      `SELECT b.*,
+              cs.title as service_title, cs.base_price as service_price,
+              sc.name_en as subcategory_name,
+              u.full_name as user_name, u.avatar_url as user_avatar, u.phone as user_phone
+       FROM bookings b
+       LEFT JOIN contractor_services cs ON cs.id = b.service_id
+       LEFT JOIN subcategories sc ON sc.id = b.subcategory_id
+       LEFT JOIN users u ON u.id = b.user_id
+       ${whereClause}
+       ORDER BY b.created_at DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      params
+    );
+
+    res.json({ success: true, bookings });
+  } catch (error) {
+    console.error('Error fetching contractor bookings:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch bookings' });
+  }
+});
+
+// GET /api/contractor/reviews — Contractor's reviews
+router.get('/reviews', async (req, res) => {
+  try {
+    const profile = await getProfile(req.user.id);
+    if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
+
+    const { page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 100);
+    const offset = (pageNum - 1) * limitNum;
+
+    const reviews = await db.getRows(
+      `SELECT r.*, 
+              u.full_name as customer_name, u.avatar_url as customer_photo,
+              b.booking_number, cs.title as service_title
+       FROM reviews r
+       JOIN bookings b ON b.id = r.booking_id
+       JOIN users u ON u.id = r.user_id
+       LEFT JOIN contractor_services cs ON cs.id = b.service_id
+       WHERE r.contractor_id = $1
+       ORDER BY r.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [profile.id, limitNum, offset]
+    );
+
+    res.json({ success: true, reviews });
+  } catch (error) {
+    console.error('Error fetching reviews:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch reviews' });
+  }
+});
+
+// PUT /api/contractor/reviews/:id/reply — Reply to a review
+router.put('/reviews/:id/reply', async (req, res) => {
+  try {
+    const { reply } = req.body;
+    if (!reply) return res.status(422).json({ success: false, error: 'reply is required' });
+
+    const profile = await getProfile(req.user.id);
+    
+    const review = await db.updateRow(
+      `UPDATE reviews SET contractor_reply = $1, replied_at = NOW(), updated_at = NOW()
+       WHERE id = $2 AND contractor_id = $3 RETURNING *`,
+      [reply, req.params.id, profile.id]
+    );
+
+    if (!review) return res.status(404).json({ success: false, error: 'Review not found' });
+
+    res.json({ success: true, review });
+  } catch (error) {
+    console.error('Error replying to review:', error);
+    res.status(500).json({ success: false, error: 'Failed to reply to review' });
+  }
+});
+
 module.exports = router;
