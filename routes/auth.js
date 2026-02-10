@@ -6,7 +6,7 @@ const { authMiddleware, generateToken, hashPassword, comparePassword } = require
 // POST /api/auth/register — Register new user
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, phone, full_name, role = 'user', preferred_language = 'en' } = req.body;
+    const { email, password, phone, full_name, role = 'user', preferred_language = 'en', business_name, lat, lng } = req.body;
 
     if (!email || !password || !full_name) {
       return res.status(422).json({ success: false, error: 'email, password, and full_name are required' });
@@ -30,6 +30,15 @@ router.post('/register', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, phone, full_name, role, preferred_language, avatar_url, is_active, created_at, updated_at`,
       [email, password_hash, phone || null, full_name, role === 'contractor' ? 'contractor' : 'user', preferred_language]
     );
+
+    // If contractor, create contractor profile with location
+    if (role === 'contractor') {
+      await db.insertRow(
+        `INSERT INTO contractor_profiles (user_id, business_name, verification_status, is_online, lat, lng)
+         VALUES ($1, $2, 'verified', false, $3, $4)`,
+        [user.id, business_name || full_name, lat || null, lng || null]
+      );
+    }
 
     // Create session token
     const token = generateToken();
