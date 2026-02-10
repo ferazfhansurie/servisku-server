@@ -206,16 +206,23 @@ router.put('/online-status', async (req, res) => {
   }
 });
 
-// PUT /api/contractor/location — Update live location
+// PUT /api/contractor/location — Update live location (also auto-verifies profile)
 router.put('/location', async (req, res) => {
   try {
     const { lat, lng } = req.body;
-    await db.updateRow(
-      'UPDATE contractor_profiles SET lat = $1, lng = $2, updated_at = NOW() WHERE user_id = $3 RETURNING *',
+    // Update location and auto-verify if pending (for MVP)
+    const profile = await db.updateRow(
+      `UPDATE contractor_profiles 
+       SET lat = $1, lng = $2, 
+           verification_status = CASE WHEN verification_status = 'pending' THEN 'verified' ELSE verification_status END,
+           verified_at = CASE WHEN verification_status = 'pending' THEN NOW() ELSE verified_at END,
+           updated_at = NOW() 
+       WHERE user_id = $3 RETURNING *`,
       [lat, lng, req.user.id]
     );
-    res.json({ success: true });
+    res.json({ success: true, profile });
   } catch (error) {
+    console.error('Error updating location:', error);
     res.status(500).json({ success: false, error: 'Failed to update location' });
   }
 });
